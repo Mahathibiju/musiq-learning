@@ -1,0 +1,28 @@
+.dart_tool/
+.packages
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.idea/
+.vscode/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Audio/model/generated files
+backend/separated/
+backend/demucs_test/
+backend/lyrics_cache/
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
+
+# OS
+.DS_Store
