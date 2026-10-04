@@ -357,7 +357,8 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
       _recordingFeedback = null;
       _statusMessage = recordingReady ? null : 'No microphone audio was captured. Check microphone access and try again.';
     });
-    if (recordingReady) await _analyzeRecordedSection();
+    // Keep the completed take available so the singer can listen before
+    // explicitly asking for analysis.
   }
 
   Future<void> _handleMicrophoneFailure(Object error) async {
@@ -385,18 +386,22 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
     setState(() => _analyzingRecording = true);
     try {
       final recording = _userPitchAnalysis.recordingFile;
-      if (recording == null ||
-          !await recording.exists() ||
-          await recording.length() <= 44) {
-        _showMessage('A saved recording is not available to analyze yet.');
-        return;
+      var analyzedPoints = const <PitchPoint>[];
+      if (recording != null &&
+          await recording.exists() &&
+          await recording.length() > 44) {
+        analyzedPoints = await _userPitchAnalysis.analyzeRecording();
       }
-      final analyzedPoints = await _userPitchAnalysis.analyzeRecording();
-      final feedback = _buildSingingFeedback(analyzedPoints);
+      // Live estimates use the backing-track timeline and remain useful if
+      // writing the microphone WAV failed.
+      final pointsForAnalysis = analyzedPoints.isNotEmpty
+          ? analyzedPoints
+          : List<PitchPoint>.unmodifiable(_recordedPitchPoints);
+      final feedback = _buildSingingFeedback(pointsForAnalysis);
       if (!mounted) return;
       setState(() {
-        if (analyzedPoints.isNotEmpty) {
-          _recordedPitchPoints = List.unmodifiable(analyzedPoints);
+        if (pointsForAnalysis.isNotEmpty) {
+          _recordedPitchPoints = List.unmodifiable(pointsForAnalysis);
         }
         _recordingAnalysisComplete = true;
         _recordingReady = false;
@@ -571,6 +576,39 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
     }
   }
 
+  Future<void> _selectPracticeIssue(_SingingIssue issue) async {
+    final maximum = widget.original.duration.inMilliseconds / 1000;
+    if (maximum <= 1) return;
+    final start = (issue.start.inMilliseconds / 1000)
+        .clamp(0.0, maximum - 1)
+        .toDouble();
+    final end = (issue.end.inMilliseconds / 1000)
+        .clamp(start + 1, maximum)
+        .toDouble();
+    await _vocalPlayback.stop();
+    if (!mounted) return;
+    setState(() {
+      _manualRangeStartSeconds = start;
+      _manualRangeEndSeconds = end;
+      _practiceSectionLoaded = false;
+      _manualLoopActive = false;
+      _originalVocalActive = false;
+    });
+  }
+
+  void _updatePracticeRange(RangeValues range) {
+    if (_practiceSectionLoaded) {
+      unawaited(_vocalPlayback.stop());
+    }
+    setState(() {
+      _manualRangeStartSeconds = range.start;
+      _manualRangeEndSeconds = range.end;
+      _practiceSectionLoaded = false;
+      _manualLoopActive = false;
+      _originalVocalActive = false;
+    });
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -693,10 +731,11 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
               animation: _playback,
               builder: (context, _) => SongPitchGraph(
                 reference: _analysis?.referenceVocalPitch ?? const [],
-                user:
-                    _userPitchAnalysis.isRecording ||
-                        _recordingReady ||
-                        _recordingAnalysisComplete
+            user:
+                _userPitchAnalysis.isRecording ||
+                    _recordingReady ||
+                    _recordingAnalysisComplete ||
+                    _recordedPitchPoints.isNotEmpty
                     ? _recordedPitchPoints
                     : const [],
                 duration: widget.original.duration,
@@ -824,7 +863,8 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
               ),
             ],
             if (_userPitchAnalysis.isRecording ||
-                _userPitchAnalysis.recordingFile != null) ...[
+                _userPitchAnalysis.recordingFile != null ||
+                _recordedPitchPoints.isNotEmpty) ...[
               const SizedBox(height: 12),
               _buildRecordingCard(),
             ],
@@ -1505,36 +1545,40 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
     ),
   );
 
-  Widget _buildPitchIssue(_SingingIssue issue) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.only(bottom: 7),
-    padding: const EdgeInsets.all(10),
-    decoration: BoxDecoration(
-      color: const Color(0xFF202228),
-      borderRadius: BorderRadius.circular(11),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '${issue.timeLabel()}   ${issue.title}',
-          style: const TextStyle(
-            color: yellow,
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
+  Widget _buildPitchIssue(_SingingIssue issue) => InkWell(
+    onTap: () => unawaited(_selectPracticeIssue(issue)),
+    borderRadius: BorderRadius.circular(11),
+    child: Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF202228),
+        borderRadius: BorderRadius.circular(11),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${issue.timeLabel()}   ${issue.title}',
+            style: const TextStyle(
+              color: yellow,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+            ),
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          issue.description,
-          style: const TextStyle(color: white, fontSize: 11, height: 1.35),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Practice tip: ${issue.practiceTip}',
-          style: const TextStyle(color: muted, fontSize: 10, height: 1.35),
-        ),
-      ],
+          const SizedBox(height: 4),
+          Text(
+            issue.description,
+            style: const TextStyle(color: white, fontSize: 11, height: 1.35),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Practice tip: ${issue.practiceTip} · Tap to practice this time',
+            style: const TextStyle(color: muted, fontSize: 10, height: 1.35),
+          ),
+        ],
+      ),
     ),
   );
 
@@ -1570,6 +1614,7 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
 
   Widget _buildRecordingCard() {
     final recording = _userPitchAnalysis.isRecording;
+    final hasAudioFile = _userPitchAnalysis.recordingFile != null;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -1593,7 +1638,11 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
               const SizedBox(width: 7),
               Expanded(
                 child: Text(
-                  recording ? 'RECORDING YOUR VOICE' : 'TAKE READY TO ANALYZE',
+                  recording
+                      ? 'RECORDING YOUR VOICE'
+                      : hasAudioFile
+                      ? 'TAKE READY TO ANALYZE'
+                      : 'PITCH TAKE READY TO ANALYZE',
                   style: const TextStyle(
                     color: white,
                     fontSize: 10,
@@ -1623,7 +1672,7 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
             ),
           ),
           if (!recording &&
-              _userPitchAnalysis.recordingFile != null &&
+              hasAudioFile &&
               (_recordingReady || _recordingAnalysisComplete)) ...[
             const SizedBox(height: 8),
             AnimatedBuilder(
@@ -1655,6 +1704,11 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
                 ),
               ),
             ),
+          ],
+          if (!recording &&
+              (_recordingReady ||
+                  _recordedPitchPoints.isNotEmpty ||
+                  _recordingAnalysisComplete)) ...[
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
@@ -1723,6 +1777,20 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
             '${_formatDuration(Duration(milliseconds: (values.start * 1000).round()))}  —  ${_formatDuration(Duration(milliseconds: (values.end * 1000).round()))}',
             style: const TextStyle(color: muted, fontSize: 11),
           ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Start: ${_formatDuration(Duration(milliseconds: (values.start * 1000).round()))}',
+                  style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w800),
+                ),
+              ),
+              Text(
+                'End: ${_formatDuration(Duration(milliseconds: (values.end * 1000).round()))}',
+                style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w800),
+              ),
+            ],
+          ),
           RangeSlider(
             values: values,
             min: 0,
@@ -1736,12 +1804,9 @@ class _SongAnalysisScreenState extends State<SongAnalysisScreen> {
                 Duration(milliseconds: (values.end * 1000).round()),
               ),
             ),
-            onChanged: _practiceSectionLoaded || _manualLoopActive
+            onChanged: (_vocalPlayback.isPlaying || _manualLoopActive)
                 ? null
-                : (range) => setState(() {
-                    _manualRangeStartSeconds = range.start;
-                    _manualRangeEndSeconds = range.end;
-                  }),
+                : _updatePracticeRange,
           ),
           const SizedBox(height: 3),
           AnimatedBuilder(
