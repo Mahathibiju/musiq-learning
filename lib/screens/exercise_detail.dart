@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:musiq_learning/models/musical_note.dart';
 import 'package:musiq_learning/services/exercise_generator.dart';
@@ -54,6 +56,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   SwaraExerciseType _selectedSwaraType = SwaraExerciseType.saraliVarisai;
 
   int _bpm = 75;
+  bool _metronomeEnabled = false;
   int _variantIndex = 0;
   int? _activeNoteIndex;
   PlaybackStatus _playbackStatus = PlaybackStatus.idle;
@@ -81,12 +84,22 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         setState(() => _playbackStatus = status);
       }
     };
+    _playbackController.onMetronomeChanged = (enabled) {
+      if (mounted && _metronomeEnabled != enabled) {
+        setState(() => _metronomeEnabled = enabled);
+      }
+    };
   }
 
   @override
   void dispose() {
     _playbackController.dispose();
     super.dispose();
+  }
+
+  void _setMetronomeEnabled(bool enabled) {
+    setState(() => _metronomeEnabled = enabled);
+    unawaited(_playbackController.setMetronomeEnabled(enabled));
   }
 
   void _regenerateExercise() {
@@ -215,6 +228,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
 
               // 4. Tempo / BPM Selector
               _buildTempoSelector(),
+              const SizedBox(height: 24),
+
+              // Metronome uses the same tempo as the exercise sequencer.
+              _buildMetronomeControl(),
               const SizedBox(height: 24),
 
               // 5. Synchronized Swaras Display Card
@@ -478,6 +495,65 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   }
 
   // Tempo Selector & Display
+  Widget _buildMetronomeControl() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      decoration: BoxDecoration(
+        color: darkCardBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cardBorderColor, width: 1),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'METRONOME',
+                  style: TextStyle(
+                    color: secondaryLime,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'Synchronized at $_bpm BPM',
+                  style: const TextStyle(
+                    color: textWhite,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            children: [
+              Text(
+                _metronomeEnabled ? 'ON' : 'OFF',
+                style: const TextStyle(
+                  color: textSecondary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              Switch.adaptive(
+                value: _metronomeEnabled,
+                activeTrackColor: primaryYellow,
+                onChanged: _setMetronomeEnabled,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTempoSelector() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 14.0),
@@ -545,7 +621,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
               ),
               IconButton(
                 onPressed: () {
-                  if (_bpm < 180) {
+                  if (_bpm < 200) {
                     setState(() {
                       _bpm += 5;
                       _playbackController.setBpm(_bpm);
